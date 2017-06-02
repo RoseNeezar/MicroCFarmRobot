@@ -1,0 +1,325 @@
+#include<Servo.h>
+#include<EEPROM.h>
+
+#define IrLeft_pin        A0
+#define IrRight_pin       A2
+#define IrMiddle_pin      A1
+#define sensorValue_pin   A4
+#define LdrRed_pin        A5
+
+const int buttonPin = 2;     // the number of the pushbutton pin
+const int ledPin =  13;      // the number of the LED pin
+const int buttonPinMem = 3;   
+const byte pin_seven_seg = 4;
+
+// variables will change:
+int buttonState;
+
+Servo MotorLeft;
+Servo MotorRight;
+
+int IrLeft;
+int IrMiddle;
+int IrRight;
+
+//red count
+int LdrRed;
+int Ldr_Treshold = 700;
+int red_prestate;
+int redState = 0;
+int red_found = 0;
+int pre_squarecount;
+
+int endLine = 0;
+int waitCount;
+
+bool power = false;
+
+//count box
+int currReading;
+int prevReading;
+int threshold = 500;
+int counter = 0;
+unsigned int timeNow = 0;
+
+//7 segment
+int sevenSegDigitValue[10][7] = { { 0,0,0,0,0,0,1},//0
+                                { 1,0,0,1,1,1,1},//1
+                                { 0,0,1,0,0,1,0},//2
+                                { 0,0,0,0,1,1,0},//3
+                                { 1,0,0,1,1,0,0},//4
+                                { 0,1,0,0,1,0,0},//5
+                                { 0,1,0,0,0,0,0},//6
+                                { 0,0,0,1,1,1,1},//7
+                                { 0,0,0,0,0,0,0},//8
+                                { 0,0,0,1,1,0,0}};//9
+
+byte RedCount = 0;
+//test count
+int SquareCount;
+int preSquareCount = 0;
+unsigned int now = 0;
+const byte sqCountTs = 3;
+unsigned int sqCountOldTs;
+byte squarePrestate,squarecountState = 0;
+                             
+                                 
+int sensorValue = 0; 
+
+int startMove;
+
+  void setup() {
+    // put your setup code here, to run once:
+    Serial.begin(9600);
+
+    pinMode(ledPin, OUTPUT);
+  // initialize the pushbutton pin as an input:
+    pinMode(buttonPin, INPUT_PULLUP);
+    
+    //attachInterrupt(digitalPinToInterrupt(buttonPin), stateSerial,FALLING);
+    
+    pinMode(IrLeft,OUTPUT);
+    pinMode(IrMiddle,OUTPUT);
+    pinMode(IrRight,OUTPUT);
+    pinMode(LdrRed,OUTPUT);
+
+    MotorLeft.detach();
+    MotorRight.detach();
+    startMove = 0;
+
+    pinMode(4,OUTPUT);
+    pinMode(5,OUTPUT);
+    pinMode(6,OUTPUT);
+    pinMode(7,OUTPUT);
+    pinMode(8,OUTPUT);
+    pinMode(9,OUTPUT);
+    pinMode(12,OUTPUT);
+    RedCount = 0;
+    pinMode(buttonPinMem, INPUT_PULLUP);
+    attachInterrupt(digitalPinToInterrupt(buttonPinMem), state_pb1,FALLING);
+    SquareCount = 1;
+  
+  }
+  
+  
+  void loop() 
+  {
+    now = 0;
+   // SquareCount = 0;
+   // waitCount = 0;
+    preSquareCount = 0;
+    
+    IrLeft = digitalRead(IrLeft_pin);
+    IrMiddle = analogRead(IrMiddle_pin);
+    IrRight = analogRead(IrRight_pin);
+    LdrRed = analogRead(LdrRed_pin);
+    IrAdjust();
+    //IR_Serial();
+   //currReading = analogRead(sensorValue_pin);
+  
+    buttonState = digitalRead(buttonPin);
+   
+  if(buttonState == LOW && startMove == 0) 
+  {
+    digitalWrite(13, HIGH);
+    startMove =1;
+    MotorLeft.attach(10);
+    MotorRight.attach(11);
+  }
+  
+  if(startMove==1)
+  {
+    now = millis()/1000;
+    countBox();
+    red_detect();
+    seven_seg_display(RedCount);
+   if(SquareCount ==  4 || SquareCount == 5)
+   {
+      followLine();
+      
+      if(IrMiddle == 0 && IrRight == 0 && IrLeft == 0)
+      {
+         MoveLeft();
+
+          if(IrMiddle == 1 || IrRight == 1)
+        {
+              followLine();
+        }
+      }
+    }
+     else if(SquareCount > 6)
+     {
+       Stop();
+     }
+     else
+      followLine();
+   }
+  }
+ }   
+  
+  //count box
+  void countBox()
+  { 
+    currReading = analogRead(sensorValue_pin);
+    unsigned int interval;
+    if(currReading > threshold && prevReading < threshold)
+    {  
+      interval = now - sqCountOldTs;
+      if(interval > sqCountTs)
+      {
+     
+        sqCountOldTs = now;
+        SquareCount++;
+      }
+      else
+      {
+        interval = 0;
+      }
+       Serial.println(SquareCount); 
+    }
+  }
+
+  void seven_seg_display (int acidUpdate)
+  {
+    byte pin = pin_seven_seg;
+    const byte samplingTime = 1000;
+    unsigned int oldTime;
+    if(millis()- oldTime>samplingTime)
+    {
+      for(byte segCount = 0; segCount < 7; ++segCount)
+      {
+        digitalWrite(pin,sevenSegDigitValue[acidUpdate][segCount]);
+        ++pin;
+        if(pin == 10)
+        {
+          pin = 12;
+        }
+      }
+      oldTime = millis();
+    }
+  }
+
+  void red_detect()
+  {
+    int val_Ldr = analogRead(LdrRed_pin);
+
+    if(val_Ldr < Ldr_Treshold && red_prestate > Ldr_Treshold)
+    {
+      red_found = 1;
+     
+    }
+    red_prestate = val_Ldr;
+
+    if(pre_squarecount == counter-1)
+    {
+      if(red_found)
+      {
+        EEPROM.write(pre_squarecount,'X');
+        RedCount++;
+        Serial.println("setp1");
+      }
+      else
+      {
+        EEPROM.write(pre_squarecount, 'O');
+      }
+      red_found = 0;
+    }
+    pre_squarecount = counter;
+    //Serial.println(val_Ldr);
+  }
+
+  void stateSerial()
+  {
+    power = !power;
+    delay(10);  
+  }
+
+  void state_pb1()
+  {
+    byte j1, j2;
+    char val;
+    Serial.println("--Acid Location--");
+    for(j1 = 0; j1 < 3; j1++)
+    {
+      val = EEPROM.read(3-j1);
+      Serial.print(val);
+    }
+    //Serial.print("\t");
+    for(j2 = 4;j2 < 7; j2++)
+    {
+      val = EEPROM.read(j2);
+      Serial.print(val);
+    }
+    Serial.println();
+    delay(300);
+  }
+  
+  void IrAdjust()
+  {   
+  if(IrMiddle <= 55)
+    IrMiddle = 0;
+    else
+    IrMiddle = 1;
+    if(IrRight <= 60)
+    IrRight = 0;
+    else
+    IrRight = 1;
+  }
+
+   void followLine()
+  {
+    if(IrMiddle == 1)
+      MoveForward();
+    else if(IrLeft == 1)
+      MoveRight();
+    else if(IrRight == 1)
+      MoveLeft();
+    else if(IrLeft == 1 && IrMiddle == 1)
+      MoveRight();
+    else if(IrRight == 1 && IrMiddle == 1)
+      MoveLeft();
+    else if(IrRight == 1 && IrLeft == 1 && IrMiddle == 1)
+       MoveForward();
+     else
+       MoveForward();
+        
+  }
+  
+  void Stop()
+  {
+    MotorLeft.detach();
+    MotorRight.detach();
+  }
+
+  void MoveForward()
+  {
+    MotorLeft.attach(10);
+    MotorRight.attach(11);
+    MotorLeft.write(83);
+    MotorRight.write(99);
+  }
+
+  void MoveRight()
+  {
+     MotorRight.attach(11);
+     MotorLeft.detach();
+    MotorRight.write(105);//105  
+  }
+
+  void MoveLeft()
+  {
+    MotorLeft.attach(10);
+    MotorRight.detach();
+    MotorLeft.write(75);// 0
+   
+  }
+  
+  void IR_Serial()
+  {
+    Serial.print("right  = ");
+    Serial.print(IrRight);
+    Serial.print(" middle = ");
+    Serial.print(IrMiddle);
+    Serial.print(" left   = ");
+    Serial.println(IrLeft);
+  }
